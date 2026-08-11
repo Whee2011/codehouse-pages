@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>WebAuthn PRF Test - CodeHouse iPad</title>
+<style>
+  body { font-family: -apple-system, monospace; margin: 20px; font-size: 15px; }
+  button { font-size: 18px; padding: 12px 20px; margin: 8px 0; display: block; width: 100%; }
+  pre { background: #f4f4f4; padding: 12px; border-radius: 8px; white-space: pre-wrap; word-break: break-all; }
+</style>
+</head>
+<body>
+<h2>WebAuthn PRF 扩展测试（iPad + USB-C YubiKey）</h2>
+<button id="cap">1. 查询 getClientCapabilities</button>
+<button id="create">2. 创建 credential（插入并触摸 YubiKey）</button>
+<button id="get">3. 用 PRF 派生 secret（再触摸一次）</button>
+<pre id="out">结果会显示在这里…</pre>
+<script>
+const out = document.getElementById('out');
+const log = (...a) => { out.textContent += a.join(' ') + '\n'; };
+const salt = new Uint8Array(32); salt.fill(0x42);
+let credId = null;
+
+document.getElementById('cap').onclick = async () => {
+  out.textContent = '';
+  try {
+    if (!PublicKeyCredential.getClientCapabilities) {
+      log('getClientCapabilities: 不存在（Safari 未实现 WebAuthn L3 能力查询）');
+      return;
+    }
+    const caps = await PublicKeyCredential.getClientCapabilities();
+    for (const [k, v] of caps) log(k + ': ' + v);
+    log(caps.get('prf') ? '>>> PRF: 支持 <<<' : '>>> PRF: 不支持 <<<');
+  } catch (e) { log('ERROR: ' + e); }
+};
+
+document.getElementById('create').onclick = async () => {
+  out.textContent = '';
+  try {
+    const cred = await navigator.credentials.create({ publicKey: {
+      challenge: crypto.getRandomValues(new Uint8Array(32)),
+      rp: { name: 'CodeHouse PRF Test' },
+      user: { id: new Uint8Array([1,2,3,4]), name: 'prf-test', displayName: 'PRF Test' },
+      pubKeyCredParams: [{ type: 'public-key', alg: -7 }],
+      authenticatorSelection: { authenticatorAttachment: 'cross-platform' },
+      extensions: { prf: {} },
+      timeout: 60000
+    }});
+    credId = cred.rawId;
+    const ext = cred.getClientExtensionResults();
+    log('create OK, credentialId:', btoa(String.fromCharCode(...new Uint8Array(cred.rawId))).slice(0, 24) + '…');
+    log('create extensions:', JSON.stringify(ext));
+    log(ext.prf && ext.prf.enabled ? '>>> PRF enabled on credential <<<' : '>>> PRF 未在 credential 上启用 <<<');
+  } catch (e) { log('ERROR: ' + e.name + ': ' + e.message); }
+};
+
+document.getElementById('get').onclick = async () => {
+  try {
+    if (!credId) { log('请先执行第 2 步'); return; }
+    const asrt = await navigator.credentials.get({ publicKey: {
+      challenge: crypto.getRandomValues(new Uint8Array(32)),
+      allowCredentials: [{ type: 'public-key', id: credId }],
+      extensions: { prf: { eval: { first: salt } } },
+      timeout: 60000
+    }});
+    const ext = asrt.getClientExtensionResults();
+    log('get OK');
+    if (ext.prf && ext.prf.results && ext.prf.results.first) {
+      const v = new Uint8Array(ext.prf.results.first);
+      log('>>> PRF secret (32B hex): ' + Array.from(v).map(b => b.toString(16).padStart(2,'0')).join(''));
+      log('>>> 成功：iPad 可通过 USB YubiKey 派生加密密钥 <<<');
+    } else {
+      log('>>> 未返回 PRF 结果: ' + JSON.stringify(ext));
+    }
+  } catch (e) { log('ERROR: ' + e.name + ': ' + e.message); }
+};
+</script>
+</body>
+</html>
